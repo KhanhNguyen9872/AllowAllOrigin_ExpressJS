@@ -62,9 +62,11 @@ async function proxyHandler(req, res) {
     }
 
     const origin = req.headers.origin;
-    if (origin && (ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes('*'))) {
+    // Phản hồi CORS cho mọi origin (hoặc giới hạn qua ALLOWED_ORIGINS)
+    if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
     }
 
     const contentType = response.headers.get('content-type');
