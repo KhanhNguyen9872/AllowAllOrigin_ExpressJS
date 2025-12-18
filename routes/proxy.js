@@ -57,10 +57,6 @@ async function proxyHandler(req, res) {
 
     const response = await fetch(sanitizedUrl, fetchOptions);
 
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Upstream error' });
-    }
-
     const origin = req.headers.origin;
     // Phản hồi CORS cho mọi origin (hoặc giới hạn qua ALLOWED_ORIGINS)
     if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
@@ -70,49 +66,92 @@ async function proxyHandler(req, res) {
     }
 
     const contentType = response.headers.get('content-type');
+    const contentDisposition = response.headers.get('content-disposition');
+
+    const isAttachment =
+      !!contentDisposition && /attachment/i.test(contentDisposition);
+
+    const isBinary =
+      isAttachment ||
+      (contentType &&
+        !/^text\//i.test(contentType) &&
+        !/^application\/json/i.test(contentType) &&
+        !/javascript/i.test(contentType));
+
+    // Nhánh 1: nội dung binary / file download -> stream trực tiếp từ server lên client
+    if (isBinary) {
+      if (!response.ok) {
+        // Giữ lại lỗi nhưng vẫn forward status code từ upstream
+        res.status(response.status);
+      }
+
+      if (contentType) {
+        res.setHeader('Content-Type', contentType);
+      }
+
+      if (contentDisposition) {
+        res.setHeader('Content-Disposition', contentDisposition);
+      }
+
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) {
+        res.setHeader('Content-Length', contentLength);
+        console.log('Forwarding Content-Length:', contentLength);
+      } else {
+        console.warn('No Content-Length header from upstream');
+      }
+
+      const acceptRanges = response.headers.get('accept-ranges');
+      if (acceptRanges) {
+        res.setHeader('Accept-Ranges', acceptRanges);
+      }
+
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      response.body.on('error', (err) => {
+        console.error('Upstream stream error:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Stream error' });
+        } else {
+          res.end();
+        }
+      });
+
+      res.on('error', (err) => {
+        console.error('Client response error:', err);
+        if (response.body && typeof response.body.destroy === 'function') {
+          response.body.destroy();
+        }
+      });
+
+      req.on('close', () => {
+        if (response.body && typeof response.body.destroy === 'function') {
+          response.body.destroy();
+        }
+      });
+
+      return response.body.pipe(res, { end: true });
+    }
+
+    // Nhánh 2: nội dung text/JSON -> đọc hết rồi trả về
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'Upstream error' });
+    }
+
     if (contentType) {
       res.setHeader('Content-Type', contentType);
     }
 
-    const contentLength = response.headers.get('content-length');
-    if (contentLength) {
-      res.setHeader('Content-Length', contentLength);
-      console.log('Forwarding Content-Length:', contentLength);
-    } else {
-      console.warn('No Content-Length header from upstream');
-    }
-
-    const acceptRanges = response.headers.get('accept-ranges');
-    if (acceptRanges) {
-      res.setHeader('Accept-Ranges', acceptRanges);
-    }
-
     res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
 
-    response.body.on('error', (err) => {
-      console.error('Upstream stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Stream error' });
-      } else {
-        res.end();
-      }
-    });
+    if (/^application\/json/i.test(contentType || '')) {
+      const data = await response.json();
+      return res.json(data);
+    }
 
-    res.on('error', (err) => {
-      console.error('Client response error:', err);
-      if (response.body && typeof response.body.destroy === 'function') {
-        response.body.destroy();
-      }
-    });
-
-    req.on('close', () => {
-      if (response.body && typeof response.body.destroy === 'function') {
-        response.body.destroy();
-      }
-    });
-
-    response.body.pipe(res, { end: true });
+    const text = await response.text();
+    return res.send(text);
   } catch (err) {
     console.error('Proxy error:', err);
     if (!res.headersSent) {
