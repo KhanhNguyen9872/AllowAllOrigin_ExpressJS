@@ -65,16 +65,37 @@ async function proxyHandler(req, res) {
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
 
-    const contentType = response.headers.get('content-type');
+    const contentType = response.headers.get('content-type') || '';
     const contentDisposition = response.headers.get('content-disposition');
 
     const isAttachment =
       !!contentDisposition && /attachment/i.test(contentDisposition);
 
+    const isMediaType =
+      // Video / audio / image
+      /^video\//i.test(contentType) ||
+      /^audio\//i.test(contentType) ||
+      /^image\//i.test(contentType) ||
+      // HLS playlist: nhiều server set các dạng khác nhau
+      /mpegurl/i.test(contentType) || // application/vnd.apple.mpegurl, application/x-mpegURL, ...
+      /m3u8/i.test(contentType) ||
+      /application\/vnd\.apple\.mpegurl/i.test(contentType) ||
+      /application\/x-mpegURL/i.test(contentType) ||
+      // Streaming text (SSE, logs liên tục, v.v.)
+      /^text\/event-stream/i.test(contentType) ||
+      // Một số dạng file application phổ biến có thể stream
+      /^application\/octet-stream/i.test(contentType) ||
+      /^application\/pdf/i.test(contentType) ||
+      /^application\/zip/i.test(contentType) ||
+      /^application\/x-7z-compressed/i.test(contentType) ||
+      /^application\/x-rar-compressed/i.test(contentType) ||
+      /^application\/vnd\.ms-/i.test(contentType) ||
+      /^application\/vnd\.openxmlformats-officedocument/i.test(contentType);
+
     const isBinary =
       isAttachment ||
-      (contentType &&
-        !/^text\//i.test(contentType) &&
+      isMediaType ||
+      (!/^text\//i.test(contentType) &&
         !/^application\/json/i.test(contentType) &&
         !/javascript/i.test(contentType));
 
@@ -104,6 +125,21 @@ async function proxyHandler(req, res) {
       const acceptRanges = response.headers.get('accept-ranges');
       if (acceptRanges) {
         res.setHeader('Accept-Ranges', acceptRanges);
+      }
+
+      const contentRange = response.headers.get('content-range');
+      if (contentRange) {
+        res.setHeader('Content-Range', contentRange);
+      }
+
+      const etag = response.headers.get('etag');
+      if (etag) {
+        res.setHeader('ETag', etag);
+      }
+
+      const lastModified = response.headers.get('last-modified');
+      if (lastModified) {
+        res.setHeader('Last-Modified', lastModified);
       }
 
       res.setHeader('Cache-Control', 'no-cache');
